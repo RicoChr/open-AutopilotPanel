@@ -35,6 +35,7 @@
 // Function prototypes ------------------------------------------------------------------------
 void pollButton();
 void pollRotary();
+void processRotaryClicks();
 void updateButton(bool buttonState[16]);
 void release();
 
@@ -76,11 +77,18 @@ Rotary rotVS = Rotary(rotVS_A, rotVS_B);
 
 // Global variables
 const uint8_t numRotary = 6;            // For each rotary encoder two (one per direction)
-unsigned long releaseTime[numRotary];    // Stores the release time for the buttons (rotary encoder).
+unsigned long releaseTime[numRotary] = {0};    // Stores the release time for the buttons (rotary encoder).
+unsigned long pressTime[numRotary] = {0};
 bool rotaryPressed[numRotary] = {false}; // Stores the button state for the rotary encoder (gets automatically reset)
-const int rotaryHoldTime = 50;           // time a Button is held down in ms (rotary encoder)
+const int rotaryHoldTime = 25;           // time a Button is held down in ms (rotary encoder)
 const int buttonHoldTime = 100;          // time a Button is held down in ms (buttons)
+const int clickCounterMaxValue = 10;
 uint16_t lastButtonState = 0;            // Stores the button state for the MCP23017 Port Expander
+bool lastHeadingButtonState = false;
+bool lastAltitudeButtonState = false;
+int rotaryClickCounters[numRotary] = {0};
+uint16_t pollButtonFrequency = 200;
+uint16_t pollButtonCounter = 0;
 
 void setup()
 {
@@ -99,7 +107,9 @@ void setup()
   }
 
   // Initialize the Rotary Encoder
-  // No need to call begin
+  rotHDG.begin(true);
+  rotALT.begin(true);
+  rotVS.begin(true);
 
   // Switch on power LED
   pinMode(pwrLED, OUTPUT);
@@ -109,7 +119,15 @@ void setup()
 void loop()
 {
   pollRotary();
-  pollButton();
+  processRotaryClicks();
+  if (pollButtonCounter >= pollButtonFrequency)
+  {
+    pollButtonCounter = 0;
+    pollButton();
+  } else
+  {
+    pollButtonCounter++;
+  }  
   release();
 }
 
@@ -150,35 +168,42 @@ void pollRotary()
   unsigned char resultHDG = rotHDG.process();
   if (resultHDG)
   {
-    if (!rotaryPressed[0 + resultHDG / 16 - 1]) // rejects input when button wasn't released before
-    {
-      Joystick.setButton(0 + resultHDG / 16 - 1, 1);
-      releaseTime[0 + resultHDG / 16 - 1] = millis() + rotaryHoldTime;
-      rotaryPressed[0 + resultHDG / 16 - 1] = true;
-    }
+    rotaryClickCounters[0 + resultHDG / 16 - 1] += 1;    
   }
 
   unsigned char resultALT = rotALT.process();
   if (resultALT)
   {
-    if (!rotaryPressed[2 + resultALT / 16 - 1]) // rejects input when button wasn't released before
-    {
-      Joystick.setButton(2 + resultALT / 16 - 1, 1);
-      releaseTime[2 + resultALT / 16 - 1] = millis() + rotaryHoldTime;
-      rotaryPressed[2 + resultALT / 16 - 1] = true;
-    }
+    rotaryClickCounters[2 + resultALT / 16 - 1] += 1;    
   }
 
   unsigned char resultVS = rotVS.process();
   if (resultVS)
   {
-    if (!rotaryPressed[4 + resultVS / 16 - 1]) // rejects input when button wasn't released before
-    {
-      Joystick.setButton(4 + resultVS / 16 - 1, 1);
-      releaseTime[4 + resultVS / 16 - 1] = millis() + rotaryHoldTime;
-      rotaryPressed[4 + resultVS / 16 - 1] = true;
-    }
+    rotaryClickCounters[4 + resultVS / 16 - 1] += 1;
   }
+}
+
+void processRotaryClicks()
+{
+  for (int i = 0; i < numRotary; i++)
+  {
+    if (rotaryClickCounters[i] > clickCounterMaxValue)
+    {
+      rotaryClickCounters[i] = clickCounterMaxValue;
+    }
+
+    if (rotaryClickCounters[i] > 0)
+    {
+      if (!rotaryPressed[i] && releaseTime[i] < millis()) // rejects input when button wasn't released before
+      {
+        Joystick.setButton(i, 1);
+        pressTime[i] = millis() + rotaryHoldTime;
+        rotaryPressed[i] = true;
+        rotaryClickCounters[i]--;
+      }      
+    }
+  }  
 }
 
 // Release buttons of the Joystick triggered by the Rotary Encoder
@@ -186,9 +211,10 @@ void release()
 {
   for (int i = 0; i < numRotary; i++)
   {
-    if (releaseTime[i] < millis())
+    if (pressTime[i] < millis())
     {
       Joystick.setButton(i, 0);
+      pressTime[i] = millis() + rotaryHoldTime;
       releaseTime[i] = millis() + rotaryHoldTime;
       if (rotaryPressed[i])
       {
